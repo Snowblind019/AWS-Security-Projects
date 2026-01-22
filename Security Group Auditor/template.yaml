@@ -1,0 +1,77 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Security Group Auditor - Scans for overly permissive security group rules
+
+Parameters:
+  AlertEmail:
+    Type: String
+    Description: Email address to receive security alerts
+    
+  ScheduleExpression:
+    Type: String
+    Default: 'rate(1 day)'
+    Description: How often to run the audit (e.g., 'rate(1 day)' or 'cron(0 9 * * ? *)')
+
+Resources:
+  # SNS Topic for security alerts
+  SecurityAuditTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: SecurityGroupAuditAlerts
+      DisplayName: Security Group Audit Alerts
+      Subscription:
+        - Endpoint: !Ref AlertEmail
+          Protocol: email
+
+  # Lambda function
+  SecurityGroupAuditorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: SecurityGroupAuditor
+      Description: Scans EC2 security groups for overly permissive rules
+      CodeUri: .
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.12
+      Timeout: 300
+      MemorySize: 256
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref SecurityAuditTopic
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - ec2:DescribeSecurityGroups
+              Resource: '*'
+            - Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref SecurityAuditTopic
+      Events:
+        ScheduledAudit:
+          Type: Schedule
+          Properties:
+            Schedule: !Ref ScheduleExpression
+            Description: Triggers the security group audit
+            Enabled: true
+
+  # CloudWatch Log Group
+  AuditorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${SecurityGroupAuditorFunction}'
+      RetentionInDays: 30
+
+Outputs:
+  FunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt SecurityGroupAuditorFunction.Arn
+    
+  SNSTopicArn:
+    Description: SNS topic ARN for alerts
+    Value: !Ref SecurityAuditTopic
+    
+  FunctionName:
+    Description: Lambda function name
+    Value: !Ref SecurityGroupAuditorFunction
