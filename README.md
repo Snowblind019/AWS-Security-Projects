@@ -10,7 +10,7 @@ I created this separate repo to showcase these as portfolio pieces as they're mo
 
 ## Projects
 
-### 1. [S3 Security Auditor](./S3%20Security%Auditor)
+### 1. [S3 Security Auditor](./S3%20Security%20Auditor)
 **What it does**: Scans all S3 buckets for security misconfigurations (public access, missing encryption, etc.) and sends SNS alerts.
 
 **What I learned**: Boto3 S3 operations, handling different security configurations, working with bucket policies vs ACLs.
@@ -28,7 +28,7 @@ I created this separate repo to showcase these as portfolio pieces as they're mo
 
 ---
 
-### 3. [CloudTrail Log Analyzer](./CloudTrail%20Log%20Auditor)
+### 3. [CloudTrail Log Analyzer](./CloudTrail%20Log%20Analyzer)
 **What it does**: Uses Athena SQL queries to analyze CloudTrail logs for suspicious activities (root usage, failed auth, policy changes).
 
 **What I learned**: SQL fundamentals, AWS Glue data catalog, querying logs at scale with Athena, asynchronous query handling.
