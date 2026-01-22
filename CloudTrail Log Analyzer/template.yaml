@@ -1,0 +1,250 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: CloudTrail Log Analyzer (SQL/Athena) - Analyzes CloudTrail logs using Athena SQL queries
+
+Parameters:
+  AlertEmail:
+    Type: String
+    Description: Email address to receive security alerts
+    
+  ScheduleExpression:
+    Type: String
+    Default: 'rate(1 day)'
+    Description: How often to run the analysis (e.g., 'rate(1 day)' or 'cron(0 9 * * ? *)')
+    
+  CloudTrailBucketName:
+    Type: String
+    Description: Name of the S3 bucket where CloudTrail logs are stored
+    
+  AthenaOutputBucketName:
+    Type: String
+    Description: Name of the S3 bucket for Athena query results (will be created)
+    
+  HoursToAnalyze:
+    Type: Number
+    Default: 24
+    Description: Number of hours of CloudTrail logs to analyze
+
+Resources:
+  # S3 bucket for Athena query results
+  AthenaOutputBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref AthenaOutputBucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteQueryResultsAfter30Days
+            Status: Enabled
+            ExpirationInDays: 30
+
+  # Glue Database for CloudTrail
+  CloudTrailGlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: cloudtrail_logs
+        Description: Database for CloudTrail logs
+
+  # Glue Table for CloudTrail logs
+  CloudTrailGlueTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref CloudTrailGlueDatabase
+      TableInput:
+        Name: cloudtrail_table
+        Description: CloudTrail logs table
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          EXTERNAL: 'TRUE'
+          'projection.enabled': 'true'
+          'projection.eventday.type': 'date'
+          'projection.eventday.range': '2020/01/01,NOW'
+          'projection.eventday.format': 'yyyy/MM/dd'
+          'projection.eventday.interval': '1'
+          'projection.eventday.interval.unit': 'DAYS'
+          'storage.location.template': !Sub 's3://${CloudTrailBucketName}/AWSLogs/${AWS::AccountId}/CloudTrail/${AWS::Region}/${projection.eventday}'
+        StorageDescriptor:
+          Columns:
+            - Name: eventversion
+              Type: string
+            - Name: useridentity
+              Type: struct<type:string,principalid:string,arn:string,accountid:string,invokedby:string,accesskeyid:string,userName:string,sessioncontext:struct<attributes:struct<mfaauthenticated:string,creationdate:string>,sessionissuer:struct<type:string,principalId:string,arn:string,accountId:string,userName:string>>>
+            - Name: eventtime
+              Type: string
+            - Name: eventsource
+              Type: string
+            - Name: eventname
+              Type: string
+            - Name: awsregion
+              Type: string
+            - Name: sourceipaddress
+              Type: string
+            - Name: useragent
+              Type: string
+            - Name: errorcode
+              Type: string
+            - Name: errormessage
+              Type: string
+            - Name: requestparameters
+              Type: string
+            - Name: responseelements
+              Type: string
+            - Name: additionaleventdata
+              Type: string
+            - Name: requestid
+              Type: string
+            - Name: eventid
+              Type: string
+            - Name: resources
+              Type: array<struct<ARN:string,accountId:string,type:string>>
+            - Name: eventtype
+              Type: string
+            - Name: apiversion
+              Type: string
+            - Name: readonly
+              Type: string
+            - Name: recipientaccountid
+              Type: string
+            - Name: serviceeventdetails
+              Type: string
+            - Name: sharedeventid
+              Type: string
+            - Name: vpcendpointid
+              Type: string
+          Location: !Sub 's3://${CloudTrailBucketName}/AWSLogs/${AWS::AccountId}/CloudTrail/${AWS::Region}/'
+          InputFormat: com.amazon.emr.cloudtrail.CloudTrailInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: com.amazon.emr.hive.serde.CloudTrailSerde
+            Parameters:
+              serialization.format: '1'
+        PartitionKeys:
+          - Name: eventday
+            Type: string
+
+  # SNS Topic for security alerts
+  CloudTrailAuditTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: CloudTrailSecurityAuditAlerts
+      DisplayName: CloudTrail Security Audit Alerts
+      Subscription:
+        - Endpoint: !Ref AlertEmail
+          Protocol: email
+
+  # Lambda function
+  CloudTrailAnalyzerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: CloudTrailLogAnalyzer-SQL
+      Description: Analyzes CloudTrail logs using Athena SQL queries
+      CodeUri: .
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.12
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref CloudTrailAuditTopic
+          ATHENA_DATABASE: !Ref CloudTrailGlueDatabase
+          ATHENA_TABLE: !GetAtt CloudTrailGlueTable.Name
+          ATHENA_OUTPUT_LOCATION: !Sub 's3://${AthenaOutputBucket}/query-results/'
+          HOURS_TO_ANALYZE: !Ref HoursToAnalyze
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            # Athena permissions
+            - Effect: Allow
+              Action:
+                - athena:StartQueryExecution
+                - athena:GetQueryExecution
+                - athena:GetQueryResults
+                - athena:StopQueryExecution
+              Resource: '*'
+            
+            # Glue permissions (for Athena to access catalog)
+            - Effect: Allow
+              Action:
+                - glue:GetDatabase
+                - glue:GetTable
+                - glue:GetPartitions
+              Resource:
+                - !Sub 'arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog'
+                - !Sub 'arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/${CloudTrailGlueDatabase}'
+                - !Sub 'arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/${CloudTrailGlueDatabase}/*'
+            
+            # S3 permissions for CloudTrail logs (read)
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:ListBucket
+              Resource:
+                - !Sub 'arn:aws:s3:::${CloudTrailBucketName}'
+                - !Sub 'arn:aws:s3:::${CloudTrailBucketName}/*'
+            
+            # S3 permissions for Athena output (read/write)
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+                - s3:DeleteObject
+                - s3:ListBucket
+              Resource:
+                - !GetAtt AthenaOutputBucket.Arn
+                - !Sub '${AthenaOutputBucket.Arn}/*'
+            
+            # SNS permissions
+            - Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref CloudTrailAuditTopic
+      Events:
+        ScheduledAudit:
+          Type: Schedule
+          Properties:
+            Schedule: !Ref ScheduleExpression
+            Description: Triggers the CloudTrail security analysis
+            Enabled: true
+
+  # CloudWatch Log Group
+  AnalyzerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${CloudTrailAnalyzerFunction}'
+      RetentionInDays: 30
+
+Outputs:
+  FunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt CloudTrailAnalyzerFunction.Arn
+    
+  SNSTopicArn:
+    Description: SNS topic ARN for alerts
+    Value: !Ref CloudTrailAuditTopic
+    
+  FunctionName:
+    Description: Lambda function name
+    Value: !Ref CloudTrailAnalyzerFunction
+    
+  AthenaDatabase:
+    Description: Athena database name
+    Value: !Ref CloudTrailGlueDatabase
+    
+  AthenaTable:
+    Description: Athena table name
+    Value: !GetAtt CloudTrailGlueTable.Name
+    
+  AthenaOutputBucket:
+    Description: S3 bucket for Athena query results
+    Value: !Ref AthenaOutputBucket
