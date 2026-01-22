@@ -1,0 +1,84 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: S3 Security Auditor - Scans S3 buckets for security misconfigurations
+
+Parameters:
+  AlertEmail:
+    Type: String
+    Description: Email address to receive security alerts
+    
+  ScheduleExpression:
+    Type: String
+    Default: 'rate(1 day)'
+    Description: How often to run the audit (e.g., 'rate(1 day)' or 'cron(0 9 * * ? *)')
+
+Resources:
+  # SNS Topic for security alerts
+  S3AuditTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: S3SecurityAuditAlerts
+      DisplayName: S3 Security Audit Alerts
+      Subscription:
+        - Endpoint: !Ref AlertEmail
+          Protocol: email
+
+  # Lambda function
+  S3SecurityAuditorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: S3SecurityAuditor
+      Description: Scans S3 buckets for security misconfigurations
+      CodeUri: .
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.12
+      Timeout: 300
+      MemorySize: 256
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref S3AuditTopic
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:ListAllMyBuckets
+                - s3:GetBucketPublicAccessBlock
+                - s3:GetBucketPolicyStatus
+                - s3:GetBucketAcl
+                - s3:GetBucketPolicy
+                - s3:GetEncryptionConfiguration
+                - s3:GetBucketVersioning
+                - s3:GetBucketLogging
+              Resource: '*'
+            - Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref S3AuditTopic
+      Events:
+        ScheduledAudit:
+          Type: Schedule
+          Properties:
+            Schedule: !Ref ScheduleExpression
+            Description: Triggers the S3 security audit
+            Enabled: true
+
+  # CloudWatch Log Group
+  AuditorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${S3SecurityAuditorFunction}'
+      RetentionInDays: 30
+
+Outputs:
+  FunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt S3SecurityAuditorFunction.Arn
+    
+  SNSTopicArn:
+    Description: SNS topic ARN for alerts
+    Value: !Ref S3AuditTopic
+    
+  FunctionName:
+    Description: Lambda function name
+    Value: !Ref S3SecurityAuditorFunction
