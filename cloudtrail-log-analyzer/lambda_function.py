@@ -132,6 +132,21 @@ def lambda_handler(event, context):
         }
 
 
+def partition_floor(hours):
+    """
+    Return the earliest eventday partition (yyyy/MM/dd, UTC) that can contain
+    events from the last `hours` hours.
+
+    The Glue table uses partition projection on `eventday`. Without a predicate
+    on that column Athena cannot prune anything and every query scans the whole
+    CloudTrail prefix, so this value is what keeps scan cost near zero.
+    One extra day of slack is included so events near a UTC midnight boundary
+    are not missed.
+    """
+    floor = datetime.utcnow() - timedelta(hours=hours + 24)
+    return floor.strftime('%Y/%m/%d')
+
+
 def execute_athena_query(athena_client, query, database, output_location):
     """
     Execute an Athena query and wait for results.
@@ -217,7 +232,8 @@ def check_root_usage(athena_client, database, table, output_location, hours):
         useragent,
         awsregion
     FROM {database}.{table}
-    WHERE useridentity.type = 'Root'
+    WHERE eventday >= '{partition_floor(hours)}'
+        AND useridentity.type = 'Root'
         AND from_iso8601_timestamp(eventtime) >= current_timestamp - interval '{hours}' hour
     ORDER BY eventtime DESC
     LIMIT 100
@@ -254,7 +270,8 @@ def check_failed_auth(athena_client, database, table, output_location, hours):
         errormessage,
         awsregion
     FROM {database}.{table}
-    WHERE errorcode IN ('UnauthorizedOperation', 'AccessDenied', 'AuthFailure')
+    WHERE eventday >= '{partition_floor(hours)}'
+        AND errorcode IN ('UnauthorizedOperation', 'AccessDenied', 'AuthFailure')
         AND from_iso8601_timestamp(eventtime) >= current_timestamp - interval '{hours}' hour
     ORDER BY eventtime DESC
     LIMIT 100
@@ -290,7 +307,8 @@ def check_iam_changes(athena_client, database, table, output_location, hours):
         sourceipaddress,
         awsregion
     FROM {database}.{table}
-    WHERE eventname IN (
+    WHERE eventday >= '{partition_floor(hours)}'
+        AND eventname IN (
         'PutUserPolicy', 'PutGroupPolicy', 'PutRolePolicy',
         'CreatePolicy', 'DeletePolicy', 'CreatePolicyVersion',
         'DeletePolicyVersion', 'AttachUserPolicy', 'AttachGroupPolicy',
@@ -331,7 +349,8 @@ def check_security_group_changes(athena_client, database, table, output_location
         sourceipaddress,
         awsregion
     FROM {database}.{table}
-    WHERE eventname IN (
+    WHERE eventday >= '{partition_floor(hours)}'
+        AND eventname IN (
         'AuthorizeSecurityGroupIngress', 'AuthorizeSecurityGroupEgress',
         'RevokeSecurityGroupIngress', 'RevokeSecurityGroupEgress',
         'CreateSecurityGroup', 'DeleteSecurityGroup'
@@ -371,7 +390,8 @@ def check_s3_policy_changes(athena_client, database, table, output_location, hou
         requestparameters,
         awsregion
     FROM {database}.{table}
-    WHERE eventname IN (
+    WHERE eventday >= '{partition_floor(hours)}'
+        AND eventname IN (
         'PutBucketPolicy', 'DeleteBucketPolicy', 'PutBucketAcl',
         'PutBucketPublicAccessBlock', 'DeleteBucketPublicAccessBlock'
     )
@@ -419,7 +439,8 @@ def check_cloudtrail_changes(athena_client, database, table, output_location, ho
         sourceipaddress,
         awsregion
     FROM {database}.{table}
-    WHERE eventname IN (
+    WHERE eventday >= '{partition_floor(hours)}'
+        AND eventname IN (
         'StopLogging', 'DeleteTrail', 'UpdateTrail',
         'PutEventSelectors'
     )

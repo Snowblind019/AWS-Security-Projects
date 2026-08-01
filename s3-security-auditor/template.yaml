@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Security Group Auditor - Scans for overly permissive security group rules
+Description: S3 Security Auditor - Scans S3 buckets for security misconfigurations
 
 Parameters:
   AlertEmail:
@@ -14,21 +14,21 @@ Parameters:
 
 Resources:
   # SNS Topic for security alerts
-  SecurityAuditTopic:
+  S3AuditTopic:
     Type: AWS::SNS::Topic
     Properties:
-      TopicName: SecurityGroupAuditAlerts
-      DisplayName: Security Group Audit Alerts
+      TopicName: S3SecurityAuditAlerts
+      DisplayName: S3 Security Audit Alerts
       Subscription:
         - Endpoint: !Ref AlertEmail
           Protocol: email
 
   # Lambda function
-  SecurityGroupAuditorFunction:
+  S3SecurityAuditorFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: SecurityGroupAuditor
-      Description: Scans EC2 security groups for overly permissive rules
+      FunctionName: S3SecurityAuditor
+      Description: Scans S3 buckets for security misconfigurations
       CodeUri: .
       Handler: lambda_function.lambda_handler
       Runtime: python3.12
@@ -36,42 +36,50 @@ Resources:
       MemorySize: 256
       Environment:
         Variables:
-          SNS_TOPIC_ARN: !Ref SecurityAuditTopic
+          SNS_TOPIC_ARN: !Ref S3AuditTopic
       Policies:
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
               Action:
-                - ec2:DescribeSecurityGroups
+                - s3:ListAllMyBuckets
+                - s3:GetBucketPublicAccessBlock
+                - s3:GetBucketPolicyStatus
+                - s3:GetBucketAcl
+                - s3:GetBucketPolicy
+                - s3:GetBucketLocation
+                - s3:GetEncryptionConfiguration
+                - s3:GetBucketVersioning
+                - s3:GetBucketLogging
               Resource: '*'
             - Effect: Allow
               Action:
                 - sns:Publish
-              Resource: !Ref SecurityAuditTopic
+              Resource: !Ref S3AuditTopic
       Events:
         ScheduledAudit:
           Type: Schedule
           Properties:
             Schedule: !Ref ScheduleExpression
-            Description: Triggers the security group audit
+            Description: Triggers the S3 security audit
             Enabled: true
 
   # CloudWatch Log Group
   AuditorLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub '/aws/lambda/${SecurityGroupAuditorFunction}'
+      LogGroupName: !Sub '/aws/lambda/${S3SecurityAuditorFunction}'
       RetentionInDays: 30
 
 Outputs:
   FunctionArn:
     Description: Lambda function ARN
-    Value: !GetAtt SecurityGroupAuditorFunction.Arn
+    Value: !GetAtt S3SecurityAuditorFunction.Arn
     
   SNSTopicArn:
     Description: SNS topic ARN for alerts
-    Value: !Ref SecurityAuditTopic
+    Value: !Ref S3AuditTopic
     
   FunctionName:
     Description: Lambda function name
-    Value: !Ref SecurityGroupAuditorFunction
+    Value: !Ref S3SecurityAuditorFunction

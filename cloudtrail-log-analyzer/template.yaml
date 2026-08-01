@@ -20,6 +20,11 @@ Parameters:
     Type: String
     Description: Name of the S3 bucket for Athena query results (will be created)
     
+  GlueTableName:
+    Type: String
+    Default: cloudtrail_table
+    Description: Name of the Glue table for CloudTrail logs
+
   HoursToAnalyze:
     Type: Number
     Default: 24
@@ -62,7 +67,7 @@ Resources:
       CatalogId: !Ref AWS::AccountId
       DatabaseName: !Ref CloudTrailGlueDatabase
       TableInput:
-        Name: cloudtrail_table
+        Name: !Ref GlueTableName
         Description: CloudTrail logs table
         TableType: EXTERNAL_TABLE
         Parameters:
@@ -73,7 +78,7 @@ Resources:
           'projection.eventday.format': 'yyyy/MM/dd'
           'projection.eventday.interval': '1'
           'projection.eventday.interval.unit': 'DAYS'
-          'storage.location.template': !Sub 's3://${CloudTrailBucketName}/AWSLogs/${AWS::AccountId}/CloudTrail/${AWS::Region}/${projection.eventday}'
+          'storage.location.template': !Sub 's3://${CloudTrailBucketName}/AWSLogs/${AWS::AccountId}/CloudTrail/${AWS::Region}/${!eventday}'
         StorageDescriptor:
           Columns:
             - Name: eventversion
@@ -158,7 +163,7 @@ Resources:
         Variables:
           SNS_TOPIC_ARN: !Ref CloudTrailAuditTopic
           ATHENA_DATABASE: !Ref CloudTrailGlueDatabase
-          ATHENA_TABLE: !GetAtt CloudTrailGlueTable.Name
+          ATHENA_TABLE: !Ref GlueTableName
           ATHENA_OUTPUT_LOCATION: !Sub 's3://${AthenaOutputBucket}/query-results/'
           HOURS_TO_ANALYZE: !Ref HoursToAnalyze
       Policies:
@@ -171,7 +176,8 @@ Resources:
                 - athena:GetQueryExecution
                 - athena:GetQueryResults
                 - athena:StopQueryExecution
-              Resource: '*'
+                - athena:GetWorkGroup
+              Resource: !Sub 'arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/primary'
             
             # Glue permissions (for Athena to access catalog)
             - Effect: Allow
@@ -243,7 +249,7 @@ Outputs:
     
   AthenaTable:
     Description: Athena table name
-    Value: !GetAtt CloudTrailGlueTable.Name
+    Value: !Ref GlueTableName
     
   AthenaOutputBucket:
     Description: S3 bucket for Athena query results
