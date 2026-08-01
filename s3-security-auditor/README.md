@@ -73,7 +73,7 @@ sam deploy --guided
 
 You will be prompted for the alert email address and the schedule (default daily). Confirm the SNS subscription in your email after deployment.
 
-The function's IAM policy grants read-only S3 configuration calls plus publish on its own topic. `ListAllMyBuckets` and the per-bucket getters are granted on `*` because those actions are account-scoped and do not support resource-level permissions.
+The function's IAM policy grants read-only S3 configuration calls plus publish on its own topic. `s3:ListAllMyBuckets` is account-scoped and can only be granted on `*`. The per-bucket getters do support resource-level permissions, so they could be narrowed to `arn:aws:s3:::*` or to a named set of buckets; they are left at `*` here because the auditor is meant to scan every bucket including ones created after deployment.
 
 ## Limitations
 
